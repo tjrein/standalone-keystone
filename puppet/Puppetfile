@@ -2,5 +2,7 @@ forge "https://forgeapi.puppetlabs.com"
 
 mod 'puppetlabs-stdlib', '4.13.1'
 mod "puppetlabs-vcsrepo", '1.4.0'
-mod "puppetlabs/firewall"
+mod 'puppetlabs/firewall'
+mod 'puppetlabs-mysql', '3.10.0'
 mod 'stankevich-python', '1.18.0'
+mod 'puppetlabs-apt', '2.3.0'

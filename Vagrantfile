@@ -12,9 +12,9 @@ Vagrant.configure("2") do |config|
     controller.vm.provision :shell, :path => "install_puppet_modules.sh"
 
     controller.vm.provision "puppet" do |puppet|
-        puppet.options = "--verbose --debug"
-        puppet.manifests_path = "puppet/manifests"
-       puppet.manifest_file = "site.pp"
+      #puppet.options = "--verbose --debug"
+      puppet.manifests_path = "puppet/manifests"
+      puppet.manifest_file = "site.pp"
     end
 
     controller.vm.network "private_network", ip: "192.168.56.105"
@@ -24,7 +24,5 @@ Vagrant.configure("2") do |config|
       vb.gui = false
       vb.memory = "4096"
     end
-
-    
   end
 end
