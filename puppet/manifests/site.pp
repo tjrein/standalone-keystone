@@ -13,20 +13,44 @@ $environment_vars = [
   'OS_IDENTITY_API_VERSION=3' 
 ]
 
-package { "mariadb-server": ensure => installed }
 package { "python-pymysql": ensure => installed }
-package { "expect": ensure => installed }
-package {"rabbitmq-server": ensure => installed }
 
-exec { 'rabbitmq_add_openstack_user':
-  command => "/usr/sbin/rabbitmqctl add_user openstack ${rabbit_password}",
-  require => Package['rabbitmq-server'] 
+class {'::mysql::server':
+  package_name     => 'mariadb-server',
+  service_name     => 'mysql',
+  includedir       => '/etc/mysql/mariadb.cnf',
+  config_file      => '/etc/my.cnf',
 }
 
-exec { 'configure_rabbitmq_access':
-  command => "/usr/sbin/rabbitmqctl set_permissions openstack '.*' '.*' '.*'",
-  require => [ Package['rabbitmq-server'],
-               Exec['rabbitmq_add_openstack_user'] ]
+mysql::db { 'keystone':
+  user     => 'keystone',
+  host     => 'localhost',
+  password => 'password',
+  grant    => ['SELECT', 'UPDATE']
+}
+
+mysql_grant { 'keystone@localhost/*.*':
+  ensure     => 'present',
+  options    => ['GRANT'],
+  privileges => ['ALL'],
+  table      => '*.*',
+  user       => 'keystone@localhost',
+}
+
+class {'::rabbitmq':
+  delete_guest_user => true,
+}
+
+rabbitmq_user { 'openstack':
+  password => 'password',
+  provider => 'rabbitmqctl'
+}
+
+rabbitmq_user_permissions { 'openstack@/':
+  configure_permission => '.*',
+  read_permission => '.*',
+  write_permission => '.*',
+  provider => 'rabbitmqctl'
 }
 
 file { '/vagrant/99-openstack.cnf':
@@ -43,7 +67,10 @@ exec { 'cp-environment':
 
 exec { 'cp-mysql-cnf':
   command => '/bin/cp /vagrant/99-openstack.cnf /etc/mysql/mariadb.conf.d/99-openstack.cnf',
-  require => File['/vagrant/99-openstack.cnf']
+  require =>  [
+                File['/vagrant/99-openstack.cnf'],
+                Class['::mysql::server'],
+              ]
 }
 
 exec { 'restart_mysql':
@@ -51,44 +78,34 @@ exec { 'restart_mysql':
   require => Exec['cp-mysql-cnf'] 
 }
 
-exec { 'run_my_script':
-  command => '/bin/bash -c "/vagrant/mysql_secure.sh"',
-  require => Exec['restart_mysql']
-}
-
-exec { "create-keystone-db":
-  command => "/usr/bin/mysql -u root -ppassword -e \"CREATE DATABASE keystone; \
-             GRANT ALL PRIVILEGES ON keystone.* TO 'keystone'@'localhost' IDENTIFIED BY 'password'; \
-             GRANT ALL PRIVILEGES ON keystone.* TO 'keystone'@'%' IDENTIFIED BY 'password';\"",
-  require => [ Package['mariadb-server'],
-               Package['python-pymysql'],
-               Exec['run_my_script']]
-}  
-
 exec { "install_keystone":
-  command => "/usr/bin/apt install keystone",
-  require => Exec["create-keystone-db"]
+  command => "/usr/bin/apt install -y keystone",
+  require => Class['::mysql::server'],
 }
 
 file_line { 'edit_sql_connection':
   path  => '/etc/keystone/keystone.conf',
   line  => "connection = mysql+pymysql://keystone:${mysql_password}@controller/keystone",
   match => 'connection = sqlite:////var/lib/keystone/keystone.db',
-  before => Exec['populate_identity_database'],
   require => Exec['install_keystone']
 }
 
 file_line { 'edit_token':
   path => '/etc/keystone/keystone.conf',
   line => "\nprovider = fernet",
-  after => "^\[token\]$",
-  before => Exec['populate_identity_database'],
+  after => "^[token]$",
   require => Exec['install_keystone']
 }
 
 exec { "populate_identity_database":
-  command => '/bin/su -s /bin/sh -c "keystone-manage db_sync" keystone',
-  require => Exec['install_keystone']
+ command => 'keystone-manage db_sync',
+ user    => 'keystone',
+ path    => '/usr/bin',
+ require =>  [ Exec['install_keystone'],
+               Exec['restart_mysql'],
+               Mysql_grant['keystone@localhost/*.*'],
+               Mysql::Db['keystone'],
+             ]
 }
 
 exec { "fernet_setup":
@@ -111,9 +128,10 @@ exec { 'bootstrap_keystone':
 }
 
 file_line { 'add_controller_name':
-  path => '/etc/apache2/apache2.conf',
-  line => "\nServerName controller",
-  before => Exec['restart_apache2']
+ path => '/etc/apache2/apache2.conf',
+ line => "\nServerName controller",
+ before => Exec['restart_apache2'],
+ require => Exec['install_keystone']
 }
 
 exec { 'restart_apache2':
@@ -150,6 +168,6 @@ exec { 'create_user_role':
 exec { 'add_role_to_user':
   environment => $environment_vars,
   command => '/usr/bin/openstack role add --project demo --user demo user',
-  require => [ Exec['create_demo_user'], 
+  require => [ Exec['create_demo_user'],
                Exec['create_user_role'] ]
 }
